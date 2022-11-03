@@ -4,7 +4,8 @@ int bit_time = 104;
 int char_time = bit_time * 11;
 int slave;
 
-int PIN = 3;
+int IN = 3;
+int OUT = 4;
 int TXRX = 11;
 
 int ALTA = HIGH;
@@ -17,7 +18,7 @@ void polarity() {
   unsigned long inicio = micros();
   int bit_check = 0;
   while( (micros()-inicio) < (bit_time * 100) ) {
-    int readed = (digitalRead(PIN) == HIGH ? 1 : 0);
+    int readed = (digitalRead(IN) == HIGH ? 1 : 0);
     bit_check = bit_check + readed;
   }
   if( bit_check < 15 ) {
@@ -32,12 +33,39 @@ void polarity() {
   }
 }
 
-void modo_escritura( bool flag = true ) {
-  pinMode(PIN, flag ? OUTPUT : INPUT);
-  digitalWrite(TXRX, flag ? HIGH : LOW);
-  if(flag){
-    digitalWrite(PIN,BAJA);
+unsigned int crc_calc( unsigned char *buf, unsigned int len )
+{
+  unsigned int crc = 0xFFFF;
+  unsigned int i = 0;
+  char bit = 0;
+
+  for( i = 0; i < len - 2; i++ )
+  {
+    crc ^= buf[i];
+
+    for( bit = 0; bit < 8; bit++ )
+    {
+      if( crc & 0x0001 )
+      {
+        crc >>= 1;
+        crc ^= 0xA001;
+      }
+      else
+      {
+        crc >>= 1;
+      }
+    }
   }
+  unsigned int A = crc / 256;
+  unsigned int B = crc % 256;
+
+//  Serial.println(buf[len-1],HEX);
+//  Serial.println(buf[len-2],HEX);
+  Serial.print("CRC CHECK: ");
+  Serial.println((A == buf[len-1] && B == buf[len-2]) ? "OK" : "FAIL");
+  
+  crc = ( B * 256 ) + A;
+  return crc;
 }
 
 /*
@@ -50,17 +78,24 @@ void wait_bit(int times = 1) {
 /*
  * Espera el tiempo de caracter
  */
-void wait_char(int times = 1) {
+void wait_char(float times = 1) {
   delayMicroseconds(char_time * times);
 }
 
 void start() {
   while(true) {
-    if(digitalRead(PIN) == ALTA) {
+    if(digitalRead(IN) == ALTA) {
       wait_bit();
       break;
     }
   }
+}
+
+int dread(){
+  return digitalRead(IN);
+}
+void dwrite(int value){
+  digitalWrite(OUT,value);
 }
 
 /*
@@ -73,7 +108,7 @@ int next() {
   unsigned long inicio = micros();
   int state = 1;
   while( (micros()-inicio) < (char_time * 3.5) ) {
-    if ( digitalRead(PIN) == ALTA ) {
+    if ( dread() == ALTA ) {
       if ( (micros() - inicio) > (char_time * 1.5) ) {
         state = -1; //Proximo bit excedio tiempo
       } else {
@@ -86,12 +121,12 @@ int next() {
   return state;
 }
 
-bool leerByte(int& ptr) {
+bool leerByte( unsigned char& ptr) {
   volatile int valor = 0;
   volatile int parity = 0;
 
   for ( int index = 1; index <= 128; index = index * 2 ) {
-    if ( digitalRead(PIN) == BAJA ) {
+    if ( dread() == BAJA ) {
       valor = valor + index;
       parity++;
     }
@@ -104,13 +139,12 @@ bool leerByte(int& ptr) {
 }
 
 
-bool procesoLectura( int (&dato)[256], int& index ) {
-  modo_escritura(false);
+bool procesoLectura( unsigned char (&dato)[256], unsigned int& index ) {
   start();
   while( index < 256 ) {
     if ( !leerByte(dato[index]) ) {
       // Error al leer el byte
-//      Serial.println("Error al leer el byte");
+      //Serial.println("Error al leer el byte");
       return false;
     }
     index++;
@@ -119,6 +153,7 @@ bool procesoLectura( int (&dato)[256], int& index ) {
       case 0:
         continue;
       case 1: // Trama finalizada
+           unsigned int crc = crc_calc(dato,index);
           return true;
       case -1: // Error en la trama
         Serial.println("Lectura de bit erronea en next()");
@@ -131,35 +166,47 @@ bool procesoLectura( int (&dato)[256], int& index ) {
 }
 
 
-//void escribirByte( int valor ) {
-//  modo_escritura(true);
-//  volatile int cociente = valor;
-//  volatile int parity = 0;
+void escribirByte( int valor ) {
+  digitalWrite(TXRX, HIGH);
+  volatile int cociente = valor;
+  volatile int parity = 0;
 //  Serial.println(valor,HEX);
-////  wait_bit(); // Tiene que esperar?
-//
-//  for( int i = 0; i < 8; i++ ) {
-//    if ( cociente == 0 ) {
-//       digitalWrite(3, BAJA);
-//       wait_bit();
-//       continue;
-//    }
-//    volatile int resto = cociente % 2;
-//    cociente = floor( cociente / 2 );
-//    if ( resto == 1 ) {
-//      digitalWrite(3, ALTA);
-//      parity++;
-//    } else {
-//      digitalWrite(3,BAJA);
-//    }
-//    wait_bit();
-//  }
+  dwrite(ALTA);  //ORIGINAL EN ALTA
+//  Serial.print("-");
+  wait_bit(); // bit inicio
+
+  for( int i = 0; i < 8; i++ ) {
+    if ( cociente == 0 ) {
+       dwrite(BAJA); //ORIGINAL BAJA
+//       Serial.print(0);
+       wait_bit();
+       continue;
+    }
+    volatile int resto = cociente % 2;
+    cociente = floor( cociente / 2 );
+    if ( resto == 1 ) {
+      dwrite(ALTA);  //ORIGINAL ALTA
+//      Serial.print(1);
+      parity++;
+    } else {
+//      Serial.print(0);
+      dwrite(BAJA); //ORIGINAL EN BAJA
+    }
+    wait_char();
+  }
 //  parity = ( parity % 2 ) == 0 ? BAJA : ALTA;
-//  digitalWrite(3, parity);
+//  dwrite(parity);
+//  Serial.print( parity == ALTA ? 0 : 1);
 //  wait_bit();
-//  digitalWrite(3, BAJA);
+  dwrite(ALTA);  //ORIGINAL EN ALTA
+//  Serial.print("-"); //bit stop
+  wait_bit();
+//  Serial.print("-"); //bit stop
+  wait_bit();
+//  Serial.println("");
+//  dwrite(BAJA);
 //  wait_bit(); 
-//}
+}
 
 //void responderTrama( int (&dato)[256], int &longitud ) {
 //  wait_char(3);
@@ -168,7 +215,7 @@ bool procesoLectura( int (&dato)[256], int& index ) {
 //  }
 //}
 
-void ejecutarFuncion(int dato[256], int index) {
+void ejecutarFuncion(unsigned char dato[256], unsigned int index) {
   Serial.print("Trama: ");
   Serial.print("[");
   for ( int k = 0; k < index; k++ ) {           
@@ -183,6 +230,10 @@ void ejecutarFuncion(int dato[256], int index) {
   int ah,al,bh,bl,address,cant,value;
   switch( funcion ) {
     case 1: // Read coils
+      for( int z = 0; z < index; z++ ) {
+        escribirByte(dato[z]);
+        //wait_char(1); // Tiempo de espera entre bytes??
+      }
       break;
     case 2: // Read discrete inputs
       break;
@@ -229,15 +280,16 @@ void setup() {
   // put your setup code here, to run once:
   slave = 1;
   pinMode(TXRX,OUTPUT);
-  modo_escritura(false);
+  pinMode(IN, INPUT);
+  pinMode(OUT, OUTPUT);
   Serial.begin(baudios);
   polarity();
 }
 
 void loop() { 
   // put your main code here, to run repeatedly:
-  int dato[256];
-  int longitud = 0;
+  unsigned char dato[256];
+  unsigned int longitud = 0;
   if ( !procesoLectura( dato, longitud ) ) {
     Serial.println("Hubo un error de la lectura de la trama");
   }
