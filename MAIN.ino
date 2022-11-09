@@ -167,6 +167,8 @@ bool procesoLectura( unsigned char (&dato)[256], unsigned int& index ) {
 
 
 void escribirByte( int valor ) {
+  Serial.println("Escribiendo byte:");
+  Serial.println(valor,HEX);
   digitalWrite(TXRX, HIGH);
   volatile int cociente = valor;
   volatile int parity = 0;
@@ -225,15 +227,20 @@ void ejecutarFuncion(unsigned char dato[256], unsigned int index) {
      }
   }
   Serial.println("]");
+
+  if ( dato[0] != slave ) {
+    Serial.println("No es para mi");
+    return;
+  }
   
   int funcion = dato[1];
   int ah,al,bh,bl,address,cant,value;
   switch( funcion ) {
     case 1: // Read coils
-      for( int z = 0; z < index; z++ ) {
-        escribirByte(dato[z]);
+//      for( int z = 0; z < index; z++ ) {
+//        escribirByte(dato[z]);
         //wait_char(1); // Tiempo de espera entre bytes??
-      }
+//      }
       break;
     case 2: // Read discrete inputs
       break;
@@ -255,6 +262,31 @@ void ejecutarFuncion(unsigned char dato[256], unsigned int index) {
     case 4: // Read input registers
       break;
     case 5: // Write Single Coil
+      ah = dato[2];
+      al = dato[3];
+      address = (ah*256)+al;
+
+      bh = dato[4];
+      bl = dato[5];
+      if ( bl == 0x00 && ( bh == 0xFF || bh == 0x00 ) ) {
+        EEPROM.write(address, bh == 0xFF ? 1 : 0 );
+        Serial.print("Se guardo un: ");Serial.println(bh == 0xFF ? 1 : 0);
+        int crch = dato[6];
+        int crcl = dato[7];
+        unsigned char response[256] = {
+          slave,
+          funcion,
+          ah,al,
+          bh,bl,
+          crch,
+          crcl
+        };
+        for( int z = 0; z < 8; z++ ) {
+          escribirByte(dato[z]); // Tiempo de espera entre bytes??
+        }
+      } else {
+        Serial.println("error en el valor");
+      }
       break;
     case 6: // Write single register
       Serial.println("Fn: Write single register");
